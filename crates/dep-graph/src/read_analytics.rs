@@ -1,5 +1,5 @@
+use alloy_primitives::{Address, B256};
 use std::collections::{HashMap, HashSet};
-
 use types::types::{BlockAccess, StateKey, TxPosition, WriteEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +21,8 @@ impl Default for Caveats {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotReadCount {
-    pub address: alloy_primitives::Address,
-    pub slot: alloy_primitives::B256,
+    pub address: Address,
+    pub slot: B256,
     pub read_count: usize,
 }
 
@@ -34,7 +34,7 @@ pub struct HotReadSlots {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContractReadWrite {
-    pub address: alloy_primitives::Address,
+    pub address: Address,
     pub read_count: usize,
     pub write_count: usize,
     pub read_ratio: f64,
@@ -48,8 +48,8 @@ pub struct ReadWriteRatio {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheCandidate {
-    pub address: alloy_primitives::Address,
-    pub slot: alloy_primitives::B256,
+    pub address: Address,
+    pub slot: B256,
     pub read_count: usize,
     pub write_count: usize,
 }
@@ -62,8 +62,8 @@ pub struct CacheCandidacy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentionHotspot {
-    pub address: alloy_primitives::Address,
-    pub slot: alloy_primitives::B256,
+    pub address: Address,
+    pub slot: B256,
     pub read_count: usize,
     pub write_count: usize,
 }
@@ -82,8 +82,8 @@ pub struct PrefetchWorkingSet {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MevSandwichSignal {
-    pub address: alloy_primitives::Address,
-    pub slot: alloy_primitives::B256,
+    pub address: Address,
+    pub slot: B256,
     pub may_be_noop_write: bool,
 }
 
@@ -95,7 +95,7 @@ pub struct MevSandwichSignals {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TouchedUnchanged {
-    pub address: alloy_primitives::Address,
+    pub address: Address,
     pub wasted_access_list_entry: bool,
 }
 
@@ -128,7 +128,7 @@ pub fn compute_read_analytics(block: &BlockAccess) -> ReadAnalytics {
     }
 }
 
-fn key_address(key: &StateKey) -> alloy_primitives::Address {
+fn key_address(key: &StateKey) -> Address {
     match key {
         StateKey::StorageSlot { address, .. }
         | StateKey::Balance(address)
@@ -137,20 +137,15 @@ fn key_address(key: &StateKey) -> alloy_primitives::Address {
     }
 }
 
-fn storage_address_slot(
-    key: &StateKey,
-) -> Option<(alloy_primitives::Address, alloy_primitives::B256)> {
+fn storage_address_slot(key: &StateKey) -> Option<(Address, B256)> {
     match key {
         StateKey::StorageSlot { address, slot } => Some((*address, *slot)),
         _ => None,
     }
 }
 
-fn read_counts(
-    block: &BlockAccess,
-) -> HashMap<(alloy_primitives::Address, alloy_primitives::B256), usize> {
-    let mut counts: HashMap<(alloy_primitives::Address, alloy_primitives::B256), usize> =
-        HashMap::new();
+fn read_counts(block: &BlockAccess) -> HashMap<(Address, B256), usize> {
+    let mut counts: HashMap<(Address, B256), usize> = HashMap::new();
     for key in block.reads() {
         if let Some((addr, slot)) = storage_address_slot(key) {
             *counts.entry((addr, slot)).or_insert(0) += 1;
@@ -159,11 +154,8 @@ fn read_counts(
     counts
 }
 
-fn write_counts(
-    block: &BlockAccess,
-) -> HashMap<(alloy_primitives::Address, alloy_primitives::B256), usize> {
-    let mut counts: HashMap<(alloy_primitives::Address, alloy_primitives::B256), usize> =
-        HashMap::new();
+fn write_counts(block: &BlockAccess) -> HashMap<(Address, B256), usize> {
+    let mut counts: HashMap<(Address, B256), usize> = HashMap::new();
     for entry in &block.writes {
         if let Some((addr, slot)) = storage_address_slot(&entry.key) {
             *counts.entry((addr, slot)).or_insert(0) += 1;
@@ -172,8 +164,8 @@ fn write_counts(
     counts
 }
 
-fn per_address_counts(block: &BlockAccess) -> HashMap<alloy_primitives::Address, (usize, usize)> {
-    let mut map: HashMap<alloy_primitives::Address, (usize, usize)> = HashMap::new();
+fn per_address_counts(block: &BlockAccess) -> HashMap<Address, (usize, usize)> {
+    let mut map: HashMap<Address, (usize, usize)> = HashMap::new();
     for key in block.reads() {
         let entry = map.entry(key_address(key)).or_insert((0, 0));
         entry.0 += 1;
@@ -185,11 +177,11 @@ fn per_address_counts(block: &BlockAccess) -> HashMap<alloy_primitives::Address,
     map
 }
 
-fn write_addresses(block: &BlockAccess) -> HashSet<alloy_primitives::Address> {
+fn write_addresses(block: &BlockAccess) -> HashSet<Address> {
     block.writes.iter().map(|w| key_address(&w.key)).collect()
 }
 
-fn read_addresses(block: &BlockAccess) -> HashSet<alloy_primitives::Address> {
+fn read_addresses(block: &BlockAccess) -> HashSet<Address> {
     block.reads().iter().map(key_address).collect()
 }
 
@@ -214,7 +206,12 @@ fn compute_hot_read_slots(block: &BlockAccess) -> HotReadSlots {
             read_count,
         })
         .collect();
-    slots.sort_by_key(|b| std::cmp::Reverse(b.read_count));
+    slots.sort_by(|a, b| {
+        b.read_count
+            .cmp(&a.read_count)
+            .then(a.address.cmp(&b.address))
+            .then(a.slot.cmp(&b.slot))
+    });
 
     HotReadSlots {
         slots,
@@ -241,7 +238,11 @@ fn compute_read_write_ratio(block: &BlockAccess) -> ReadWriteRatio {
             }
         })
         .collect();
-    contracts.sort_by_key(|b| std::cmp::Reverse(b.read_count));
+    contracts.sort_by(|a, b| {
+        b.read_count
+            .cmp(&a.read_count)
+            .then(a.address.cmp(&b.address))
+    });
 
     ReadWriteRatio {
         contracts,
@@ -253,8 +254,7 @@ fn compute_cache_candidacy(block: &BlockAccess) -> CacheCandidacy {
     let rcounts = read_counts(block);
     let wcounts = write_counts(block);
 
-    let mut all_slots: HashSet<(alloy_primitives::Address, alloy_primitives::B256)> =
-        HashSet::new();
+    let mut all_slots: HashSet<(Address, B256)> = HashSet::new();
     all_slots.extend(rcounts.keys());
     all_slots.extend(wcounts.keys());
 
@@ -275,7 +275,12 @@ fn compute_cache_candidacy(block: &BlockAccess) -> CacheCandidacy {
             }
         })
         .collect();
-    candidates.sort_by_key(|b| std::cmp::Reverse(b.read_count));
+    candidates.sort_by(|a, b| {
+        b.read_count
+            .cmp(&a.read_count)
+            .then(a.address.cmp(&b.address))
+            .then(a.slot.cmp(&b.slot))
+    });
 
     CacheCandidacy {
         candidates,
@@ -304,7 +309,12 @@ fn compute_contention_hotspots(block: &BlockAccess) -> ContentionHotspots {
             }
         })
         .collect();
-    hotspots.sort_by_key(|b| std::cmp::Reverse(b.read_count + b.write_count));
+    hotspots.sort_by(|a, b| {
+        (b.read_count + b.write_count)
+            .cmp(&(a.read_count + a.write_count))
+            .then(a.address.cmp(&b.address))
+            .then(a.slot.cmp(&b.slot))
+    });
 
     ContentionHotspots {
         hotspots,
@@ -323,15 +333,20 @@ fn compute_mev_sandwich_signals(block: &BlockAccess) -> MevSandwichSignals {
     let read_keys: HashSet<StateKey> = block.reads().clone();
     let tx_writes: Vec<(&WriteEntry, usize)> = tx_writes_with_position(block);
 
+    let mut tx_write_counts: HashMap<(Address, B256), usize> = HashMap::new();
+    for (w, _) in &tx_writes {
+        if let Some(key) = storage_address_slot(&w.key) {
+            *tx_write_counts.entry(key).or_insert(0) += 1;
+        }
+    }
+
     let mut signals: Vec<MevSandwichSignal> = tx_writes
         .iter()
-        .filter_map(|(w, _tx_idx)| {
+        .filter_map(|(w, _)| {
             if read_keys.contains(&w.key) {
                 if let Some((address, slot)) = storage_address_slot(&w.key) {
-                    let write_count_to_slot = tx_writes
-                        .iter()
-                        .filter(|(tw, _)| storage_address_slot(&tw.key) == Some((address, slot)))
-                        .count();
+                    let write_count_to_slot =
+                        tx_write_counts.get(&(address, slot)).copied().unwrap_or(0);
                     let may_be_noop_write = write_count_to_slot <= 1;
                     return Some(MevSandwichSignal {
                         address,
@@ -381,7 +396,6 @@ fn compute_touched_unchanged(block: &BlockAccess) -> TouchedUnchangedAccounts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{Address, B256};
     use types::types::{BlockContext, WriteValue};
 
     fn addr(byte: u8) -> Address {
